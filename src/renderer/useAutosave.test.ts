@@ -260,3 +260,71 @@ describe('dirty / leaveProject', () => {
     expect(await leaveProject(null, false, () => false)).toBe(true)
   })
 })
+
+describe('flush and in-flight saves', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const deferred = () => {
+    let resolve!: () => void, reject!: (e: Error) => void
+    const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+
+  it('flush waits for a save already running (timer fired, nothing pending)', async () => {
+    const w = deferred()
+    const save = vi.fn().mockReturnValue(w.promise)
+    const a = createAutosaver(save, 500)
+    a.schedule(d('1'))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(save).toHaveBeenCalledTimes(1)
+    let done = false
+    void a.flush().then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(false)
+    w.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(true)
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('flush also writes an edit scheduled while a save was running, after it, never overlapping', async () => {
+    const w = deferred()
+    const save = vi.fn().mockReturnValueOnce(w.promise).mockResolvedValue(undefined)
+    const a = createAutosaver(save, 500)
+    a.schedule(d('1'))
+    await vi.advanceTimersByTimeAsync(500)
+    a.schedule(d('2'))
+    let done = false
+    void a.flush().then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(save).toHaveBeenCalledTimes(1)
+    w.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(true)
+    expect(save.mock.calls.map((c) => c[0])).toEqual([d('1'), d('2')])
+  })
+
+  it('flush with nothing pending and nothing in flight is immediate', async () => {
+    const a = createAutosaver(vi.fn().mockResolvedValue(undefined))
+    let done = false
+    void a.flush().then(() => { done = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(done).toBe(true)
+  })
+
+  it('a failing in-flight save does not hang flush', async () => {
+    const w = deferred()
+    const save = vi.fn().mockReturnValueOnce(w.promise).mockRejectedValue(new Error('x'))
+    const a = createAutosaver(save, 500)
+    a.schedule(d('1'))
+    await vi.advanceTimersByTimeAsync(500)
+    let done = false
+    void a.flush().then(() => { done = true })
+    w.reject(new Error('disk'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(true)
+    expect(a.dirty()).toBe(true)
+  })
+})

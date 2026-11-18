@@ -16,18 +16,26 @@ export function createAutosaver(save: (doc: RequestDoc) => Promise<void>, delayM
     if (held === 0) timer = setTimeout(() => { void run() }, ms)
   }
   // A failed save keeps the doc pending and retries (backoff) until MAX_FAILURES; never throws.
+  // Saves never overlap, and `flush` (= run) waits for one already running, so a closing window cannot cut it off.
+  let inflight: Promise<void> | null = null
   const run = async () => {
     clear()
+    while (inflight) await inflight
     const doc = pending
     pending = null
     if (!doc) return
-    try {
-      await save(doc)
-      failures = 0
-    } catch {
-      if (!pending) pending = doc
-      if (++failures < MAX_FAILURES) arm(RETRY_MS)
-    }
+    const p: Promise<void> = (async () => {
+      try {
+        await save(doc)
+        failures = 0
+      } catch {
+        if (!pending) pending = doc
+        if (++failures < MAX_FAILURES) arm(RETRY_MS)
+      }
+    })()
+    inflight = p
+    await p
+    inflight = null
   }
   return {
     schedule(doc: RequestDoc) {
