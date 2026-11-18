@@ -66,13 +66,13 @@ type Selected = State['selected']
 
 /**
  * Leaving a project: write the pending edit FIRST, then drop whatever could not be saved, so no timer can
- * later write project A's draft into project B. Returns false (nothing dropped) if the user declines to lose edits.
+ * later write project A's draft into project B. `hasUnsaved` is read after the flush (the flush may have saved it). Returns false (nothing dropped) if the user declines to lose edits.
  */
 export async function leaveProject(
-  ctl: Pick<AutosaveCtl, 'flush' | 'cancel' | 'dirty'> | null, hasUnsaved: boolean, confirmLeave: () => boolean
+  ctl: Pick<AutosaveCtl, 'flush' | 'cancel' | 'dirty'> | null, hasUnsaved: () => boolean, confirmLeave: () => boolean
 ): Promise<boolean> {
   await ctl?.flush()
-  if ((ctl?.dirty() || hasUnsaved) && !confirmLeave()) return false
+  if ((ctl?.dirty() || hasUnsaved()) && !confirmLeave()) return false
   ctl?.cancel()
   return true
 }

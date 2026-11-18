@@ -47,7 +47,7 @@ describe('autosave target is resolved at flush time', () => {
   const tree = (file: string): WorkspaceTree => ({
     name: 'P', folders: [{ dir: 'a', requests: [{ file, doc: d('x') }] }], environments: [], activeEnvironment: null, warnings: []
   })
-  const base: State = { tree: tree('old.json'), selected: { dir: 'a', file: 'old.json' }, draft: d('x'), response: null, sending: false, draftId: 0, unsaved: {} }
+  const base: State = { tree: tree('old.json'), selected: { dir: 'a', file: 'old.json' }, draft: d('x'), response: null, sending: false, draftId: 0, unsaved: {}, session: 1 }
 
   it('edit then rename re-points selected: flush writes to the NEW path', async () => {
     let state = base
@@ -75,13 +75,13 @@ describe('docSaved / select immutability', () => {
   const tree: WorkspaceTree = { name: 'P', folders: [{ dir: 'a', requests: [{ file: 'r.json', doc }] }], environments: [], activeEnvironment: null, warnings: [] }
   it('docSaved replaces one tree entry without touching draft', () => {
     const draft = { ...doc, url: 'typing' }
-    const s0: State = { tree, selected: { dir: 'a', file: 'r.json' }, draft, response: null, sending: false, draftId: 0, unsaved: {} }
+    const s0: State = { tree, selected: { dir: 'a', file: 'r.json' }, draft, response: null, sending: false, draftId: 0, unsaved: {}, session: 1 }
     const s = reducer(s0, { type: 'docSaved', dir: 'a', file: 'r.json', doc: { ...doc, method: 'POST' } })
     expect(s.tree!.folders[0].requests[0].doc.method).toBe('POST')
     expect(s.draft).toBe(draft)
   })
   it('select does not share params/headers arrays with the tree', () => {
-    const s = reducer({ tree, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {} }, { type: 'select', dir: 'a', file: 'r.json' })
+    const s = reducer({ tree, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {}, session: 1 }, { type: 'select', dir: 'a', file: 'r.json' })
     expect(s.draft!.params).not.toBe(doc.params)
     expect(s.draft!.params[0]).not.toBe(doc.params[0])
   })
@@ -93,7 +93,7 @@ describe('autosaver races and retry', () => {
   const tree = (file: string): WorkspaceTree => ({
     name: 'P', folders: [{ dir: 'a', requests: [{ file, doc: d('x') }] }], environments: [], activeEnvironment: null, warnings: []
   })
-  const base: State = { tree: tree('old.json'), selected: { dir: 'a', file: 'old.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: {} }
+  const base: State = { tree: tree('old.json'), selected: { dir: 'a', file: 'old.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: {}, session: 1 }
 
   it('edit, flush, rename: nothing is written to the old path afterwards', async () => {
     let state = base
@@ -172,7 +172,7 @@ describe('unsaved requests are tracked per target', () => {
     name: 'P', environments: [], activeEnvironment: null, warnings: [],
     folders: [{ dir: 'a', requests: [{ file: 'a.json', doc: d('x') }, { file: 'b.json', doc: d('y') }] }]
   }
-  const s0: State = { tree: t, selected: { dir: 'a', file: 'a.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: {} }
+  const s0: State = { tree: t, selected: { dir: 'a', file: 'a.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: {}, session: 1 }
   const failA = (s: State) => reducer(s, { type: 'docSaved', dir: 'a', file: 'a.json', doc: d('edited'), failed: true })
 
   it('a successful save on B does not clear A; re-selecting A re-schedules its edited doc; A saved clears only A', () => {
@@ -203,7 +203,7 @@ describe('non-selected unsaved requests and sidebar rename/move', () => {
     name: 'P', environments: [], activeEnvironment: null, warnings: [],
     folders: [{ dir: 'a', requests: [{ file: 'a.json', doc: d('x') }, { file: 'b.json', doc: d('y') }] }]
   }
-  const st: State = { tree: t, selected: { dir: 'a', file: 'a.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: { 'a/b.json': true } }
+  const st: State = { tree: t, selected: { dir: 'a', file: 'a.json' }, draft: d('x'), response: null, sending: false, draftId: 1, unsaved: { 'a/b.json': true }, session: 1 }
 
   it('treeRefreshed re-points the key of a renamed NON-selected request', () => {
     const next: WorkspaceTree = { ...t, folders: [{ dir: 'a', requests: [{ file: 'a.json', doc: d('x') }, { file: 'renamed.json', doc: d('y') }] }] }
@@ -243,21 +243,36 @@ describe('dirty / leaveProject', () => {
       cancel: () => { calls.push('cancel') },
       dirty: () => false
     }
-    expect(await leaveProject(ctl, false, () => { calls.push('confirm'); return true })).toBe(true)
+    expect(await leaveProject(ctl, () => false, () => { calls.push('confirm'); return true })).toBe(true)
     expect(calls).toEqual(['flush', 'cancel'])
   })
 
   it('asks when edits could not be saved and keeps them if declined', async () => {
     const cancel = vi.fn()
     const ctl = { flush: async () => {}, cancel, dirty: () => true }
-    expect(await leaveProject(ctl, false, () => false)).toBe(false)
+    expect(await leaveProject(ctl, () => false, () => false)).toBe(false)
     expect(cancel).not.toHaveBeenCalled()
-    expect(await leaveProject({ ...ctl, dirty: () => false }, true, () => true)).toBe(true)
+    expect(await leaveProject({ ...ctl, dirty: () => false }, () => true, () => true)).toBe(true)
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
+  it('reads the unsaved map AFTER the flush: cleared by the flush means no confirmation', async () => {
+    let unsaved = true
+    const confirmLeave = vi.fn(() => false)
+    const ctl = { flush: async () => { unsaved = false }, cancel: vi.fn(), dirty: () => false }
+    expect(await leaveProject(ctl, () => unsaved, confirmLeave)).toBe(true)
+    expect(confirmLeave).not.toHaveBeenCalled()
+  })
+
+  it('still unsaved after the flush: asks', async () => {
+    const confirmLeave = vi.fn(() => false)
+    const ctl = { flush: async () => {}, cancel: vi.fn(), dirty: () => false }
+    expect(await leaveProject(ctl, () => true, confirmLeave)).toBe(false)
+    expect(confirmLeave).toHaveBeenCalledTimes(1)
+  })
+
   it('works without an autosaver', async () => {
-    expect(await leaveProject(null, false, () => false)).toBe(true)
+    expect(await leaveProject(null, () => false, () => false)).toBe(true)
   })
 })
 

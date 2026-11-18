@@ -77,7 +77,7 @@ describe('activeVariables after switching', () => {
   const tree = (active: string | null): WorkspaceTree => ({
     name: 'P', folders: [], environments: [env('local', 'http://l'), env('prod', 'http://p')], activeEnvironment: active, warnings: []
   })
-  const base: State = { tree: tree('local'), selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {} }
+  const base: State = { tree: tree('local'), selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {}, session: 0 }
   it('follows the refreshed tree', () => {
     expect(activeVariables(base)[0].value).toBe('http://l')
     const s = reducer(base, { type: 'treeRefreshed', tree: tree('prod') })

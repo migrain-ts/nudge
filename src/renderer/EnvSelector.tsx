@@ -18,7 +18,7 @@ const EnvSelector = forwardRef<HTMLSelectElement, { onManage(): void }>(function
       await window.api.setActiveEnvironment(v === NONE ? null : v)
     } catch (e) { setError(apiMessage(e)) }
     try {
-      dispatch({ type: 'treeRefreshed', tree: await window.api.loadWorkspace() })
+      dispatch({ type: 'treeRefreshed', session: state.session, tree: await window.api.loadWorkspace() })
     } catch (e) { setError(apiMessage(e)) }
   }
   return (

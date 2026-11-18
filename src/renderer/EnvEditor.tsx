@@ -30,7 +30,7 @@ export default function EnvEditor({ onClose }: { onClose(): void }) {
 
   const reload = async () => {
     const tree = await window.api.loadWorkspace()
-    dispatch({ type: 'treeRefreshed', tree })
+    dispatch({ type: 'treeRefreshed', session: state.session, tree })
     return tree
   }
   // every disk operation runs one after the other, so renderer-side calls never overlap

@@ -11,6 +11,8 @@ export type State = {
   draftId: number
   /** requests whose last save failed, keyed by `dir/file` */
   unsaved: Record<string, true>
+  /** bumps whenever a project is opened or closed; async work started in one project carries it so a late result is dropped */
+  session: number
 }
 
 /** Variables of the active environment (Task 10 adds the UI to pick it). */
@@ -24,28 +26,33 @@ export const reqKey = (dir: string, file: string) => `${dir}/${file}`
 export type Action =
   | { type: 'loaded'; tree: WorkspaceTree }
   | { type: 'closed' }
-  | { type: 'treeRefreshed'; tree: WorkspaceTree; reselect?: { dir: string; file: string }; moved?: { from: { dir: string; file: string }; to: { dir: string; file: string } } }
+  | { type: 'treeRefreshed'; session?: number; tree: WorkspaceTree; reselect?: { dir: string; file: string }; moved?: { from: { dir: string; file: string }; to: { dir: string; file: string } } }
   | { type: 'select'; dir: string; file: string }
   | { type: 'editDraft'; patch: Partial<RequestDoc> }
-  | { type: 'docSaved'; dir: string; file: string; doc: RequestDoc; failed?: boolean }
+  | { type: 'docSaved'; session?: number; dir: string; file: string; doc: RequestDoc; failed?: boolean }
   | { type: 'responded'; response: SendResult | null }
   | { type: 'sendingChanged'; sending: boolean }
 
-export const initialState: State = { tree: null, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {} }
+export const initialState: State = { tree: null, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {}, session: 0 }
 
 const cloneDoc = (d: RequestDoc): RequestDoc => ({
   ...d, params: d.params.map((r) => ({ ...r })), headers: d.headers.map((r) => ({ ...r }))
 })
 
+/** The action was started in a project session that has since ended. */
+const outdated = (state: State, action: { session?: number }) =>
+  action.session !== undefined && action.session !== state.session
+
 export function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'loaded':
-      return { ...initialState, tree: action.tree, draftId: state.draftId + 1 }
+      return { ...initialState, tree: action.tree, draftId: state.draftId + 1, session: state.session + 1 }
     case 'closed':
-      return { ...initialState, draftId: state.draftId + 1 }
+      return { ...initialState, draftId: state.draftId + 1, session: state.session + 1 }
     // Task 8 (autosave): resolve the target {dir,file} from `state.selected` at flush time and cancel pending
     // saves when the selection is cleared; never capture the path when the edit is made.
     case 'treeRefreshed': {
+      if (!state.tree || outdated(state, action)) return state
       const find = (s: { dir: string; file: string } | null | undefined) =>
         s ? action.tree.folders.find((f) => f.dir === s.dir)?.requests.find((r) => r.file === s.file) : undefined
       const moved = action.reselect && find(action.reselect) ? action.reselect : null
@@ -77,7 +84,7 @@ export function reducer(state: State, action: Action): State {
     case 'editDraft':
       return state.draft ? { ...state, draft: { ...state.draft, ...action.patch } } : state
     case 'docSaved': {
-      if (!state.tree) return state
+      if (!state.tree || outdated(state, action)) return state
       const folders = state.tree.folders.map((f) =>
         f.dir !== action.dir ? f : { ...f, requests: f.requests.map((r) => (r.file === action.file ? { ...r, doc: action.doc } : r)) }
       )

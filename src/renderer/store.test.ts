@@ -9,7 +9,7 @@ const tree: WorkspaceTree = {
   name: 'P', folders: [{ dir: 'a', requests: [{ file: 'r.json', doc }] }],
   environments: [], activeEnvironment: null, warnings: []
 }
-const empty: State = { tree: null, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {} }
+const empty: State = { tree: null, selected: null, draft: null, response: null, sending: false, draftId: 0, unsaved: {}, session: 0 }
 
 describe('reducer', () => {
   it('loaded replaces the tree and clears the selection', () => {
@@ -93,8 +93,27 @@ describe('reducer', () => {
   it('closed returns to the empty state and bumps draftId', () => {
     const busy: State = {
       tree, selected: { dir: 'a', file: 'r.json' }, draft: doc, response: { ok: false, kind: 'cancelled', error: 'x' },
-      sending: true, draftId: 4, unsaved: { 'a/r.json': true }
+      sending: true, draftId: 4, unsaved: { 'a/r.json': true }, session: 2
     }
-    expect(reducer(busy, { type: 'closed' })).toEqual({ ...empty, draftId: 5 })
+    expect(reducer(busy, { type: 'closed' })).toEqual({ ...empty, draftId: 5, session: 3 })
+  })
+})
+
+describe('stale tree refreshes', () => {
+  const other: WorkspaceTree = { ...tree, name: 'Other' }
+  it('treeRefreshed and docSaved are no-ops while no project is open', () => {
+    expect(reducer(empty, { type: 'treeRefreshed', tree })).toBe(empty)
+    expect(reducer(empty, { type: 'docSaved', dir: 'a', file: 'r.json', doc })).toBe(empty)
+  })
+  it('a refresh that started in project A cannot replace project B that was opened since', () => {
+    const a = reducer(empty, { type: 'loaded', tree })
+    const sessionA = a.session
+    const b = reducer(reducer(a, { type: 'closed' }), { type: 'loaded', tree: other })
+    expect(reducer(b, { type: 'treeRefreshed', tree, session: sessionA })).toBe(b)
+    expect(reducer(b, { type: 'docSaved', dir: 'a', file: 'r.json', doc, session: sessionA })).toBe(b)
+  })
+  it('a refresh from the current project still applies', () => {
+    const b = reducer(empty, { type: 'loaded', tree: other })
+    expect(reducer(b, { type: 'treeRefreshed', tree, session: b.session }).tree).toBe(tree)
   })
 })

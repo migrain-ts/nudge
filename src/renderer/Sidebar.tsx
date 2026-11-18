@@ -170,7 +170,7 @@ export default function Sidebar() {
   ) => {
     const t = await window.api.loadWorkspace()
     if (focus) pendingFocus.current = focus
-    dispatch({ type: 'treeRefreshed', tree: t, reselect, moved })
+    dispatch({ type: 'treeRefreshed', session: state.session, tree: t, reselect, moved })
   }
   // quiet: 'flush' saves the pending edit to the current path first, 'cancel' drops it (request is being deleted).
   // Either way autosave timers are held until the tree refresh has re-pointed `selected`.
@@ -200,18 +200,27 @@ export default function Sidebar() {
     if (!doc) return
     try {
       if (await persistUnsaved(state.unsaved, reqKey(dir, file), doc, (d) => window.api.saveRequest(dir, file, d))) {
-        dispatch({ type: 'docSaved', dir, file, doc })
+        dispatch({ type: 'docSaved', session: state.session, dir, file, doc })
       }
     } catch {
       throw new AbortAction(`Cannot ${verb}: saving failed`)
     }
   }
 
+  const unsavedNow = useRef(state.unsaved)
+  unsavedNow.current = state.unsaved
+  const [switching, setSwitching] = useState(false)
   const switchProject = async () => {
-    const hasUnsaved = Object.keys(state.unsaved).length > 0
-    const ok = await leaveProject(autosaveCtl.current, hasUnsaved, () =>
-      window.confirm('Some changes are not saved. Switch project anyway?'))
-    if (ok) dispatch({ type: 'closed' })
+    if (switching) return
+    setSwitching(true)
+    try {
+      // the unsaved map is read after the flush, through a ref (this closure's `state` is stale by then)
+      const ok = await leaveProject(autosaveCtl.current, () => Object.keys(unsavedNow.current).length > 0, () =>
+        window.confirm('Some changes are not saved. Switch project anyway?'))
+      if (ok) dispatch({ type: 'closed' })
+    } finally {
+      setSwitching(false)
+    }
   }
 
   const expand = (dir: string) => setCollapsed((c) => { const n = new Set(c); n.delete(dir); return n })
@@ -353,7 +362,9 @@ export default function Sidebar() {
       <div className="sidebar-head">
         <div className="sidebar-top">
           <div className="sidebar-title" title={tree?.name}>{tree?.name}</div>
-          <button className="switch" onClick={() => void switchProject()}>Change project…</button>
+          <button className="switch" disabled={switching} aria-busy={switching} onClick={() => void switchProject()}>
+            {switching ? 'Switching…' : 'Change project…'}
+          </button>
         </div>
         <div className="sidebar-actions">
           <button onClick={() => void addFolder()}>+ Folder</button>
