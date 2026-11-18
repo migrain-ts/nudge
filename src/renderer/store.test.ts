@@ -112,6 +112,13 @@ describe('stale tree refreshes', () => {
     expect(reducer(b, { type: 'treeRefreshed', tree, session: sessionA })).toBe(b)
     expect(reducer(b, { type: 'docSaved', dir: 'a', file: 'r.json', doc, session: sessionA })).toBe(b)
   })
+  it('a select that started in project A cannot select in project B', () => {
+    const a = reducer(empty, { type: 'loaded', tree })
+    const sessionA = a.session
+    const b = reducer(reducer(a, { type: 'closed' }), { type: 'loaded', tree })
+    expect(reducer(b, { type: 'select', dir: 'a', file: 'r.json', session: sessionA })).toBe(b)
+    expect(reducer(b, { type: 'select', dir: 'a', file: 'r.json', session: b.session }).selected).toEqual({ dir: 'a', file: 'r.json' })
+  })
   it('a refresh from the current project still applies', () => {
     const b = reducer(empty, { type: 'loaded', tree: other })
     expect(reducer(b, { type: 'treeRefreshed', tree, session: b.session }).tree).toBe(tree)

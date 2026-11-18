@@ -27,7 +27,7 @@ export type Action =
   | { type: 'loaded'; tree: WorkspaceTree }
   | { type: 'closed' }
   | { type: 'treeRefreshed'; session?: number; tree: WorkspaceTree; reselect?: { dir: string; file: string }; moved?: { from: { dir: string; file: string }; to: { dir: string; file: string } } }
-  | { type: 'select'; dir: string; file: string }
+  | { type: 'select'; session?: number; dir: string; file: string }
   | { type: 'editDraft'; patch: Partial<RequestDoc> }
   | { type: 'docSaved'; session?: number; dir: string; file: string; doc: RequestDoc; failed?: boolean }
   | { type: 'responded'; response: SendResult | null }
@@ -74,6 +74,7 @@ export function reducer(state: State, action: Action): State {
       return { ...state, tree: action.tree, unsaved, selected: null, draft: null, response: null, sending: false, draftId: state.draftId + 1 }
     }
     case 'select': {
+      if (outdated(state, action)) return state
       if (state.selected?.dir === action.dir && state.selected.file === action.file) return state
       const doc = state.tree?.folders
         .find((f) => f.dir === action.dir)

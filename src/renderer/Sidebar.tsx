@@ -232,12 +232,13 @@ export default function Sidebar() {
     setRenaming({ dir })
   })
   const addRequest = () => act(async () => {
+    const session = state.session
     const dir = state.selected?.dir ?? folders[0]?.dir
     if (!dir) throw new Error('Create a folder first.')
     const file = await window.api.createRequest(dir, { ...NEW_REQUEST })
     await refresh()
     expand(dir)
-    dispatch({ type: 'select', dir, file })
+    dispatch({ type: 'select', session, dir, file })
     setRenaming({ dir, file })
   })
 
@@ -362,7 +363,7 @@ export default function Sidebar() {
       <div className="sidebar-head">
         <div className="sidebar-top">
           <div className="sidebar-title" title={tree?.name}>{tree?.name}</div>
-          <button className="switch" disabled={switching} aria-busy={switching} onClick={() => void switchProject()}>
+          <button className="switch" aria-disabled={switching} aria-busy={switching} onClick={() => void switchProject()}>
             {switching ? 'Switching…' : 'Change project…'}
           </button>
         </div>
