@@ -11,7 +11,7 @@ const invoked: Record<Exclude<keyof Api, 'onBeforeClose'>, true> = {
   send: true, cancel: true, missingVariables: true, readyToClose: true
 }
 
-// No page listener (error screen, still loading, welcome): nothing to save, so answer right away.
+// No page listener (error-boundary screen, early load): nothing to save, so answer right away.
 const beforeClose = createBeforeClose(() => { void ipcRenderer.invoke('api:readyToClose') })
 ipcRenderer.on('app:before-close', () => beforeClose.fire())
 
