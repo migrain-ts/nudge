@@ -1,0 +1,211 @@
+# Requestly v1 Implementation Plan
+
+**Goal:** A fast, lightweight desktop HTTP client (Electron + React + TypeScript): projects as folders of JSON files, requests, environments, JSON response.
+
+**Architecture:** The Electron main process handles file storage and HTTP sending (no CORS). The preload script exposes a typed `window.api` over IPC. A light React renderer (hand-written CSS, local `useReducer` state, no UI library). Pure logic (variables, file names, storage, sending) lives in Electron-free modules tested with Vitest.
+
+**Tech Stack:** Electron, electron-vite (Vite), React 19, TypeScript 7 (`tsc --noEmit`, fall back to 6 if a tool breaks), Vitest. Native HTML5 drag and drop (no dependency).
+
+**Spec:** `docs/superpowers/specs/2026-11-18-requestly-design.md`
+
+## Global Constraints
+
+- Launch: `npm install && npm start`. No deployment, no cloud.
+- macOS + Windows: paths via `node:path`, safe file names (see Task 2).
+- Performance first: runtime dependencies are `react` and `react-dom` only. Window created immediately (`show: false`, then `ready-to-show`). Response truncated beyond 5 MB.
+- Dark Linear-like theme, hand-written CSS. Coloured methods: GET green, POST yellow, DELETE red.
+- Methods: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. Body: `none` | `json` | `text`.
+- Single-level folders. 30 s send timeout, redirects followed, cancellation possible.
+- Autosave (debounce ~500 ms), flush before switching request and on close.
+- Undefined `{{x}}` variable: text unchanged + warning before sending. No nesting.
+- `docs/ARCHITECTURE.md` kept up to date (Task 11).
+
+## Review Focus
+
+- URL that already contains `?a=1` + a params table: merge without duplicates.
+- Empty URL, missing protocol or invalid URL: clear error, never a crash.
+- Names with `/ \ : * ? " < > |`, Windows reserved names (`CON`, `NUL`), trailing dot, empty, duplicates.
+- Empty 204 response, HTML, binary, huge: the UI never freezes.
+- Corrupt JSON file in a project: skipped with a warning, the app still opens.
+
+---
+
+### Task 1: Electron + React + TS + Vitest skeleton
+
+**Files:**
+- Create: `package.json`, `electron.vite.config.ts`, `tsconfig.json`, `.gitignore` (includes `node_modules`, `out`), `src/main/index.ts`, `src/preload/index.ts`, `src/renderer/index.html`, `src/renderer/main.tsx`, `src/renderer/App.tsx`, `src/renderer/styles.css`
+
+**Interfaces:**
+- Produces: scripts `npm start` (build + launch Electron), `npm test` (vitest run), `npm run typecheck` (`tsc --noEmit`).
+
+- [ ] **Step 1:** `git init` in the project folder (it already contains `docs/`). Branch `main`.
+- [ ] **Step 2:** Initialise the project with electron-vite (react-ts template), keeping the `src/main`, `src/preload`, `src/renderer` structure. Install TypeScript 7 (`typescript@7`, `tsc` command); if `electron-vite` or its plugins refuse, record the fallback in `docs/ARCHITECTURE.md`. Add `vitest`.
+- [ ] **Step 3:** Main window: `new BrowserWindow({ show: false, backgroundColor: '#0f1012', webPreferences: { preload, contextIsolation: true, sandbox: true } })`, `show()` on `ready-to-show`. `App.tsx` only shows "Requestly" on a dark background.
+- [ ] **Step 4: Verify.** `npm run typecheck` with no error; `npm test` passes with a trivial `expect(1).toBe(1)` test in `src/shared/smoke.test.ts`; `npm start` opens the dark window in under 2 s.
+- [ ] **Step 5: Commit** `chore: scaffold electron react ts app`
+
+### Task 2: Shared types, variables, file names
+
+**Files:**
+- Create: `src/shared/types.ts`, `src/shared/variables.ts`, `src/shared/filename.ts`, `src/shared/url.ts`
+- Test: `src/shared/variables.test.ts`, `src/shared/filename.test.ts`, `src/shared/url.test.ts`
+
+**Interfaces:**
+- Produces (`types.ts`):
+  - `type Method = 'GET'|'POST'|'PUT'|'PATCH'|'DELETE'|'HEAD'|'OPTIONS'`
+  - `interface KeyValue { key: string; value: string; enabled: boolean }`
+  - `interface RequestDoc { name: string; method: Method; url: string; params: KeyValue[]; headers: KeyValue[]; bodyType: 'none'|'json'|'text'; body: string }`
+  - `interface Environment { name: string; variables: KeyValue[] }`
+  - `interface FolderNode { dir: string; requests: { file: string; doc: RequestDoc }[] }`
+  - `interface WorkspaceTree { name: string; folders: FolderNode[]; environments: Environment[]; activeEnvironment: string | null; warnings: string[] }`
+  - `type SendResult = { ok: true; status: number; statusText: string; durationMs: number; body: string; isJson: boolean; truncated: boolean; sizeBytes: number } | { ok: false; kind: 'invalid-url'|'network'|'timeout'|'cancelled'; error: string }`
+- Produces: `substitute(text: string, vars: KeyValue[]): { text: string; missing: string[] }`; `safeFileName(name: string, taken: string[]): string` (no extension, unique among `taken`); `buildUrl(url: string, params: KeyValue[]): string` (throws `Error('invalid-url')`).
+
+- [ ] **Step 1: Variable tests.** `substitute('{{baseUrl}}/u', [{key:'baseUrl',value:'http://x',enabled:true}])` gives `{text:'http://x/u', missing:[]}`; a missing variable leaves the text unchanged and gives `missing:['baseUrl']`; a variable with `enabled:false` is treated as missing; a value containing `{{b}}` is not substituted again.
+- [ ] **Step 2: Name tests.** `safeFileName('a/b:c', [])` = `'a-b-c'`; `'CON'` gives `'CON-'`; `''` gives `'untitled'`; `'x.'` gives `'x'`; duplicate: `safeFileName('x', ['x'])` = `'x 2'`.
+- [ ] **Step 3: URL tests.** `buildUrl('http://a/p?x=1', [{key:'y',value:'2',enabled:true}])` = `'http://a/p?x=1&y=2'`; a row with `enabled:false` is ignored; an empty key is ignored; `''` and `'not a url'` throw `invalid-url`; `'localhost:3000/x'` without a protocol also throws `invalid-url`.
+- [ ] **Step 4:** Run the tests and see them fail. Implement the three modules (regex `/\{\{\s*([\w.-]+)\s*\}\}/g` for variables; native `URL` + `searchParams.append` for the URL).
+- [ ] **Step 5:** Tests green. **Commit** `feat: shared types, variables, filenames, url builder`
+
+### Task 3: Storage on disk
+
+**Files:**
+- Create: `src/main/storage.ts`
+- Test: `src/main/storage.test.ts` (temporary folder via `fs.mkdtemp(os.tmpdir())`)
+
+**Interfaces:**
+- Consumes: types and `safeFileName` from Task 2.
+- Produces (all `async`, first argument `root: string`):
+  - `createWorkspace(root, name): Promise<void>` writes `workspace.json` `{ name, folderOrder: string[], requestOrder: Record<string,string[]>, activeEnvironment: string|null }`
+  - `loadWorkspace(root): Promise<WorkspaceTree>`
+  - `createFolder(root, name): Promise<string>` / `renameFolder(root, dir, newName): Promise<string>` / `deleteFolder(root, dir): Promise<void>` (returns or receives the folder name)
+  - `createRequest(root, dir, doc): Promise<string>` (returns the `<safe name>.json` file) / `saveRequest(root, dir, file, doc): Promise<void>` / `renameRequest(root, dir, file, newName): Promise<string>` / `deleteRequest(root, dir, file): Promise<void>`
+  - `moveRequest(root, from: {dir:string; file:string}, to: {dir:string; index:number}): Promise<string>` (returns the new file)
+  - `moveFolder(root, dir, index): Promise<void>`
+  - `saveEnvironment(root, env: Environment): Promise<void>` (file `environments/<safe name>.json`) / `deleteEnvironment(root, name)` / `setActiveEnvironment(root, name: string|null)`
+- Layout: a project folder = `workspace.json`, one real sub-folder per folder, one JSON file per request, `environments/`.
+
+- [ ] **Step 1: Tests.** `loadWorkspace` after `createWorkspace('p')` gives name `'p'`, `folders: []`. Create a folder + 2 requests: order preserved after reload. `moveRequest` from one folder to another at index 0: file moved on disk, order updated in the index, name clash resolved (`x 2.json`). `renameRequest` changes the file name and `doc.name`. `deleteFolder` removes the real folder. A request file containing `{ not json` is absent from the tree, `warnings` contains its path, and the rest loads. A file present on disk but missing from the index is appended to the order.
+- [ ] **Step 2:** See the failure. Implement: the index is the source of order, the disk is the source of files; atomic index write (write `.tmp` then `rename`).
+- [ ] **Step 3:** Tests green. **Commit** `feat: workspace storage on disk`
+
+### Task 4: HTTP sending
+
+**Files:**
+- Create: `src/main/http.ts`
+- Test: `src/main/http.test.ts` (local `node:http` server on port 0)
+
+**Interfaces:**
+- Consumes: `buildUrl`, `substitute`, `RequestDoc`, `Environment`, `SendResult`.
+- Produces: `sendRequest(doc: RequestDoc, variables: KeyValue[], signal?: AbortSignal, timeoutMs = 30000): Promise<SendResult>`; `findMissingVariables(doc: RequestDoc, variables: KeyValue[]): string[]` (URL, params, headers, body).
+
+- [ ] **Step 1: Tests.** Simple GET: `ok:true`, `status:200`, `isJson:true`, `durationMs > 0`. POST with `bodyType:'json'`: the server receives the body and `content-type: application/json` (unless the user set one). Headers with `enabled:false` are not sent. `{{baseUrl}}` is replaced in the URL, a header and the body. 204 response: `body:''`, `isJson:false`. HTML response: `isJson:false`, plain text. Body > 5 MB: `truncated:true`, real `sizeBytes`. 302 redirect followed. Invalid URL: `{ok:false, kind:'invalid-url'}`. Closed port: `kind:'network'`. Slow server with `timeoutMs:50`: `kind:'timeout'`. Aborted `AbortSignal`: `kind:'cancelled'`. `findMissingVariables` lists unique names.
+- [ ] **Step 2:** See the failure. Implement with Node's native `fetch` (Electron), `performance.now()` for the duration, stream reading that stops accumulating at 5 MB. `HEAD`: no body.
+- [ ] **Step 3:** Tests green. **Commit** `feat: http sender`
+
+### Task 5: IPC, preload, recent projects
+
+**Files:**
+- Create: `src/main/recents.ts`, `src/main/ipc.ts`, `src/shared/api.ts`
+- Modify: `src/main/index.ts`, `src/preload/index.ts`
+- Test: `src/main/recents.test.ts`
+
+**Interfaces:**
+- Produces (`api.ts`): `interface Api` with one method per storage function (same names and signatures as Task 3, without `root`; the open project is held in main), plus `pickFolder(mode: 'create'|'open'): Promise<string|null>`, `openWorkspace(root): Promise<WorkspaceTree>`, `createWorkspace(root, name): Promise<WorkspaceTree>`, `getRecents(): Promise<string[]>`, `reopenLast(): Promise<WorkspaceTree|null>`, `send(doc, variables, requestId): Promise<SendResult>`, `cancel(requestId): Promise<void>`, `missingVariables(doc, variables): Promise<string[]>`. `declare global { interface Window { api: Api } }`.
+- Produces (`recents.ts`): `addRecent(file, root)`, `readRecents(file): Promise<string[]>` (10 max, most recent first, ignores paths that no longer exist).
+
+- [ ] **Step 1: Recents tests.** Add 12 paths: 10 kept; re-adding a path moves it to the front; a path deleted from disk is filtered on read.
+- [ ] **Step 2:** Implement `recents.ts` (JSON file in `app.getPath('userData')`, path passed as a parameter for tests).
+- [ ] **Step 3:** Register the `ipcMain.handle` handlers in `ipc.ts`; `preload` exposes `window.api` with `contextBridge.exposeInMainWorld('api', ...)`. Folder dialog: `dialog.showOpenDialog` with `createDirectory`. `cancel` uses a `Map<requestId, AbortController>`.
+- [ ] **Step 4: Verify.** `npm run typecheck`, `npm test`, `npm start`: in the renderer console, `await window.api.getRecents()` returns `[]`.
+- [ ] **Step 5: Commit** `feat: ipc bridge and recent projects`
+
+### Task 6: App shell, welcome screen, state
+
+**Files:**
+- Create: `src/renderer/store.ts`, `src/renderer/Welcome.tsx`, `src/renderer/Layout.tsx`
+- Modify: `src/renderer/App.tsx`, `src/renderer/styles.css`
+- Test: `src/renderer/store.test.ts`
+
+**Interfaces:**
+- Produces (`store.ts`): `type State = { tree: WorkspaceTree | null; selected: { dir: string; file: string } | null; draft: RequestDoc | null; response: SendResult | null; sending: boolean }`; `reducer(state: State, action: Action): State` with actions `loaded`, `select`, `editDraft`, `responded`, `sendingChanged`; `useApp(): { state: State; dispatch: Dispatch<Action> }` via context.
+- Produces (CSS): variables `--bg:#0f1012; --panel:#131417; --border:#26272b; --text:#d4d6da; --muted:#8a8d94; --accent:#5e6ad2; --get:#4ade80; --post:#fbbf24; --delete:#f87171`.
+
+- [ ] **Step 1: Reducer tests.** `loaded` replaces the tree and clears the selection; `select` copies the request into `draft`; `editDraft` changes `draft` without touching `tree`.
+- [ ] **Step 2:** Implement the reducer. `Welcome.tsx`: "Create project" (asks for a name then `pickFolder('create')`) and "Open project" buttons + a clickable list of recents. At launch: `reopenLast()`, otherwise `Welcome`.
+- [ ] **Step 3:** `Layout.tsx`: grid with sidebar (240 px) / central area (URL bar on top, two panes below) with empty placeholders. System font, `-webkit-font-smoothing`.
+- [ ] **Step 4: Verify on screen.** Create a project in a temporary folder, see `workspace.json` created, quit and relaunch: the project reopens.
+- [ ] **Step 5: Commit** `feat: app shell, welcome screen and state`
+
+### Task 7: Sidebar + drag and drop
+
+**Files:**
+- Create: `src/renderer/Sidebar.tsx`, `src/renderer/dnd.ts`
+- Test: `src/renderer/dnd.test.ts`
+
+**Interfaces:**
+- Produces (`dnd.ts`): `type DropTarget = { dir: string; index: number }`; `computeDrop(overDir: string, overIndex: number | null, position: 'before'|'after', length: number): DropTarget` (empty folder target = index 0; `after` = index + 1).
+- Consumes: `api.createFolder|renameFolder|deleteFolder|createRequest|renameRequest|deleteRequest|moveRequest`.
+
+- [ ] **Step 1: Test.** `computeDrop('a', 1, 'after', 3)` gives `{dir:'a', index:2}`; `computeDrop('a', null, 'before', 0)` gives `{dir:'a', index:0}`.
+- [ ] **Step 2:** Implement `computeDrop`.
+- [ ] **Step 3:** `Sidebar.tsx`: project header, "+ Folder" / "+ Request" buttons, collapsible folders, requests with a coloured method (3 letters, `DEL` for DELETE). Simple context menu (rename, delete, with confirmation). Native HTML5 drag and drop: `draggable`, `onDragOver` computes `before/after` from the half of the hovered row, visible insertion line, `onDrop` calls `api.moveRequest` then reloads the tree.
+- [ ] **Step 4: Verify on screen.** Create two folders and three requests, move a request from one folder to the other and reorder it; relaunch the app: the order is kept; the files moved on disk.
+- [ ] **Step 5: Commit** `feat: sidebar tree with drag and drop`
+
+### Task 8: Request editor and autosave
+
+**Files:**
+- Create: `src/renderer/UrlBar.tsx`, `src/renderer/RequestEditor.tsx`, `src/renderer/KeyValueTable.tsx`, `src/renderer/useAutosave.ts`
+- Test: `src/renderer/useAutosave.test.ts`
+
+**Interfaces:**
+- Produces: `createAutosaver(save: (doc: RequestDoc) => Promise<void>, delayMs = 500): { schedule(doc: RequestDoc): void; flush(): Promise<void> }`; hook `useAutosave(selected, draft)` that uses it.
+- Consumes: `api.saveRequest`, `useApp`.
+
+- [ ] **Step 1: Tests (fake timers).** Three close `schedule` calls give a single `save` with the last doc; `flush()` without waiting triggers `save` immediately; `flush()` with nothing pending saves nothing.
+- [ ] **Step 2:** Implement `createAutosaver`.
+- [ ] **Step 3:** `UrlBar`: method selector, URL field, "Send" button (Cmd/Ctrl+Enter). `RequestEditor`: Params / Headers / Body tabs; `KeyValueTable` with a checkbox per row, an empty row always present at the end of the table, deletion; Body: `none|json|text` choice + monospace text area. `flush()` is called before `select` of another request and on `beforeunload`.
+- [ ] **Step 4: Verify on screen.** Edit a request, quit the app immediately, relaunch: the change is there.
+- [ ] **Step 5: Commit** `feat: request editor with autosave`
+
+### Task 9: Response and sending
+
+**Files:**
+- Create: `src/renderer/ResponsePane.tsx`, `src/renderer/JsonView.tsx`, `src/renderer/json.ts`
+- Test: `src/renderer/json.test.ts`
+
+**Interfaces:**
+- Produces (`json.ts`): `type Token = { text: string; kind: 'key'|'string'|'number'|'bool'|'null'|'punct' }`; `tokenizeJson(pretty: string): Token[][]` (one token list per line); `prettyJson(raw: string): string | null` (`null` if invalid).
+- Consumes: `api.send`, `api.cancel`, `api.missingVariables`.
+
+- [ ] **Step 1: Tests.** `prettyJson('{"a":1}')` = `'{\n  "a": 1\n}'`; `prettyJson('not json')` = `null`; `tokenizeJson` marks `"a"` as `key` and `1` as `number`.
+- [ ] **Step 2:** Implement. `JsonView` only renders the visible lines in batches (progressive rendering of 500 lines with "Show more") to stay fluid.
+- [ ] **Step 3:** `ResponsePane`: status badge (green 2xx, amber 3xx, red 4xx/5xx), duration in ms, size; formatted JSON if `isJson`, otherwise plain text; "Response truncated at 5 MB" message if `truncated`; 204 shows "Empty response"; `ok:false` errors with a readable message per `kind`. "Cancel" button while sending. Before sending, if `missingVariables` is not empty: banner "Undefined variable: baseUrl" (sending continues).
+- [ ] **Step 4: Verify on screen.** Against `https://httpbin.org/get`, `/status/404`, `/html`, `/delay/3` (cancellation), and an invalid URL.
+- [ ] **Step 5: Commit** `feat: response pane and send`
+
+### Task 10: Environments
+
+**Files:**
+- Create: `src/renderer/EnvSelector.tsx`, `src/renderer/EnvEditor.tsx`
+- Modify: `src/renderer/UrlBar.tsx` (or header), `src/renderer/App.tsx`
+
+**Interfaces:**
+- Consumes: `api.saveEnvironment|deleteEnvironment|setActiveEnvironment`, `KeyValueTable`.
+
+- [ ] **Step 1:** `EnvSelector` at the top right: list of environments + "No environment" + "Manage environments…". Choosing one calls `setActiveEnvironment` and reloads.
+- [ ] **Step 2:** `EnvEditor` (simple modal panel): create, rename, delete an environment; variables in a `KeyValueTable`. When sending, the renderer passes the active environment's variables (or `[]`).
+- [ ] **Step 3: Verify on screen.** `local` and `prod` environments with different `baseUrl`; a `{{baseUrl}}/get` request goes to the right target depending on the choice; with no environment, the warning banner appears.
+- [ ] **Step 4: Commit** `feat: environments`
+
+### Task 11: Polish, performance, documentation
+
+**Files:**
+- Create: `README.md`, `docs/ARCHITECTURE.md`
+- Modify: `package.json` (name, description, licence), optional icon
+
+- [ ] **Step 1: Performance.** Measure the time between `npm start` and the visible window (target < 1 s once built) and send a 4 MB JSON response (local test server): the UI stays fluid. Fix whatever blocks.
+- [ ] **Step 2: Edge cases.** Open a project with a corrupt JSON file: the app opens and shows the warning; request names `a/b:c` and `CON`: files created on disk without error.
+- [ ] **Step 3: Docs.** `README.md`: overview, screenshot, `npm install && npm start`, features, roadmap (OpenAPI import in v2). `docs/ARCHITECTURE.md`: main/preload/renderer processes, file format, request flow, TypeScript 7 choice or fallback, how to test.
+- [ ] **Step 4:** `npm run typecheck && npm test` green. **Commit** `docs: readme and architecture`.
