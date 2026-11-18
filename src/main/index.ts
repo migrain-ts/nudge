@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { createCloseGate } from './closeGate'
+import { isAllowedNavigation } from './navigation'
 import { registerIpc } from './ipc'
 
 let quitting = false
@@ -20,8 +21,14 @@ function createWindow(): void {
   })
   win.on('ready-to-show', () => win.show())
 
-  // The page never navigates and never opens windows or webviews (a dropped file must not replace the UI).
-  win.webContents.on('will-navigate', (e) => e.preventDefault())
+  // The page only ever reloads itself; any other navigation, new window or webview is denied
+  // (a dropped file must not replace the UI).
+  const guard = (e: Electron.Event<{ url: string }>) => {
+    if (!isAllowedNavigation(e.url, win.webContents.getURL())) e.preventDefault()
+  }
+  win.webContents.on('will-navigate', guard)
+  win.webContents.on('will-frame-navigate', guard)
+  win.webContents.on('will-redirect', guard)
   win.webContents.on('will-attach-webview', (e) => e.preventDefault())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
