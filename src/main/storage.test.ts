@@ -286,7 +286,7 @@ describe('storage', () => {
   it('openProject rejects a folder without workspace.json and changes nothing', async () => {
     const plain = path.join(parent, 'docs')
     await fs.mkdir(path.join(plain, 'sub'), { recursive: true })
-    await expect(openProject(plain)).rejects.toThrow(/not a Requestly project/)
+    await expect(openProject(plain)).rejects.toThrow(/not a Nudge project/)
     expect(await fs.readdir(plain)).toEqual(['sub'])
     await fs.writeFile(path.join(root, 'workspace.json'), '{ corrupt')
     const t = await openProject(root) // present but corrupt: still opens, with a warning

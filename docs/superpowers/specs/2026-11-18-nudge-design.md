@@ -1,10 +1,10 @@
-# Requestly: design document
+# Nudge: design document
 
 Date: 2026-11-18
 
 ## Purpose and rationale
 
-Requestly is a desktop HTTP client (in the spirit of Postman and Insomnia) built with Electron. It aims to be lightweight and fast: it launches with `npm install && npm start`, needs no account, no cloud and no deployment, and keeps everything on the local disk.
+Nudge is a desktop HTTP client (in the spirit of Postman and Insomnia) built with Electron. It aims to be lightweight and fast: it launches with `npm install && npm start`, needs no account, no cloud and no deployment, and keeps everything on the local disk.
 
 Developed on macOS, to be tested later on Windows.
 

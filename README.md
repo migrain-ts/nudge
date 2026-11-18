@@ -1,8 +1,8 @@
-# Requestly
+# Nudge
 
 A desktop HTTP client in the spirit of Postman and Insomnia, built with Electron, React and TypeScript. Projects are plain folders of JSON files on your disk: no account, no cloud, no database, and everything can be versioned with git.
 
-![Requestly showing a project with two folders, a request and a formatted JSON response](docs/screenshot.png)
+![Nudge showing a project with two folders, a request and a formatted JSON response](docs/screenshot.png)
 
 The interface is in English and uses a dark theme.
 

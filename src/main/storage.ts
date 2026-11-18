@@ -134,7 +134,7 @@ export async function createWorkspace(parent: string, name: string): Promise<str
 /** Only a folder holding a workspace.json is a project (a corrupt one still opens, with a warning). */
 export async function openProject(root: string): Promise<WorkspaceTree> {
   if (!(await fs.stat(path.join(root, INDEX)).then((s) => s.isFile(), () => false))) {
-    throw new Error('This folder is not a Requestly project (workspace.json not found).')
+    throw new Error('This folder is not a Nudge project (workspace.json not found).')
   }
   return loadWorkspace(root)
 }

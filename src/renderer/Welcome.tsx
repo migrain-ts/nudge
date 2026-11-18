@@ -43,7 +43,7 @@ export default function Welcome() {
 
   return (
     <main className="welcome">
-      <h1>Requestly</h1>
+      <h1>Nudge</h1>
       <p className="muted">A local HTTP client. Your requests are files in a folder.</p>
       {naming ? (
         <form

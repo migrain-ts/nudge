@@ -1,6 +1,6 @@
 # Architecture
 
-Requestly is an Electron app with three code areas that map to Electron's three contexts:
+Nudge is an Electron app with three code areas that map to Electron's three contexts:
 
 ```
 src/main/      Node.js main process: filesystem, HTTP, dialogs, IPC handlers
