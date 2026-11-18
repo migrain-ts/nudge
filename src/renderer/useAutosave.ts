@@ -44,6 +44,13 @@ export function createAutosaver(save: (doc: RequestDoc) => Promise<void>, delayM
       arm(delayMs)
     },
     flush: run,
+    /** Unload path: send the pending edit now, without waiting for a running save (main's queue keeps arrival order). */
+    flushNow() {
+      clear()
+      const doc = pending
+      pending = null
+      if (doc) void save(doc).catch(() => { if (!pending) pending = doc })
+    },
     /** an edit is still waiting to be written (not yet saved, or its save failed) */
     dirty: () => pending !== null,
     cancel() { clear(); pending = null; failures = 0 },
@@ -128,22 +135,28 @@ export function useAutosave() {
   const saver = useRef<ReturnType<typeof createAutosaver> | null>(null)
   const nameRef = useRef(state.draft?.name)
   nameRef.current = state.draft?.name
+  const sessionRef = useRef(state.session)
+  sessionRef.current = state.session
   if (!saver.current) {
-    const inner = createSelectedSave(
+    // The session is captured when a save starts, so its result is dropped if the project changed meanwhile.
+    saver.current = createAutosaver((doc) => {
+      const session = sessionRef.current
+      const inner = createSelectedSave(
         () => ownedSelected(ownerRef.current, () => draftIdRef.current, () => selectedRef.current)(),
-        (dir, file, doc) => { setSaving(true); return window.api.saveRequest(dir, file, doc) },
+        (dir, file, d) => { setSaving(true); return window.api.saveRequest(dir, file, d) },
         (r) => {
           setSaving(false)
-          dispatch({ type: 'docSaved', dir: r.dir, file: r.file, doc: r.doc, failed: !r.ok })
+          dispatch({ type: 'docSaved', session, dir: r.dir, file: r.file, doc: r.doc, failed: !r.ok })
         }
-    )
-    // A keystroke right after a sidebar rename carries the old name: always save the current one.
-    saver.current = createAutosaver((doc) => inner({ ...doc, name: nameRef.current ?? doc.name }))
+      )
+      // A keystroke right after a sidebar rename carries the old name: always save the current one.
+      return inner({ ...doc, name: nameRef.current ?? doc.name })
+    })
   }
   const s = saver.current
   useEffect(() => {
     autosaveCtl.current = { flush: s.flush, cancel: s.cancel, hold: s.hold, dirty: s.dirty }
-    const onUnload = () => { void s.flush() }
+    const onUnload = () => { s.flushNow() }
     window.addEventListener('beforeunload', onUnload)
     return () => {
       window.removeEventListener('beforeunload', onUnload)
